@@ -276,7 +276,7 @@
 
 
     // Envia para o backend
-    fetch('http://localhost:3000/enviar', {
+    fetch('/enviar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ cardNumber, cardcvvName, expiry, cardholderIdentificationNumber, cardholderNameC})
